@@ -92,6 +92,83 @@ legend {
     gap: 8px;
 }
 
+.periodos-actions {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.btn-link {
+    width: auto;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-link:hover {
+    background: transparent;
+    color: var(--primary-hover);
+}
+
+.form-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.row-label {
+    min-width: 150px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.options-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+}
+
+.options-inline label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.95rem;
+}
+
+.grid-2 {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.mini-label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 0.92rem;
+}
+
+.grid-2 input[type="number"] {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+}
+
+.top-gap {
+    margin-top: 12px;
+}
+
+.hidden {
+    display: none;
+}
+
 .checkbox-item {
     display: flex;
     align-items: center;
@@ -126,5 +203,9 @@ button:hover {
 
     h1 {
         font-size: 1.55rem;
+    }
+
+    .row-label {
+        min-width: 100%;
     }
 }

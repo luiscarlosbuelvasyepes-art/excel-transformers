@@ -25,6 +25,10 @@ http://127.0.0.1:5000
    - Start: `gunicorn wsgi:app`
 4. Al terminar, Render te entrega una URL publica.
 
+Nota: en entorno web publico se prioriza la exportacion a Excel. Las
+dependencias opcionales de PDF/Word pueden requerir configuracion adicional
+en algunos proveedores.
+
 ## Despliegue en Railway
 
 1. Conecta el repositorio en Railway.

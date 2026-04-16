@@ -3,334 +3,131 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Procesador Automático de Datos</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f4f7fb;
-            color: #111827;
-            padding: 20px;
-        }
-        
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            padding: 24px;
-        }
-        
-        h1 {
-            font-size: 24px;
-            font-weight: bold;
-            color: #1f2937;
-            margin-bottom: 8px;
-        }
-        
-        .estado {
-            font-size: 14px;
-            color: #334155;
-            margin-bottom: 16px;
-            padding: 12px;
-            background-color: #f1f5f9;
-            border-radius: 4px;
-        }
-        
-        .controles {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }
-        
-        button {
-            padding: 10px 20px;
-            font-size: 14px;
-            font-weight: bold;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            background-color: #0d9488;
-            color: white;
-            transition: background-color 0.2s;
-        }
-        
-        button:hover {
-            background-color: #0f766e;
-        }
-        
-        button:disabled {
-            background-color: #cbd5e1;
-            cursor: not-allowed;
-        }
-        
-        .input-file {
-            position: relative;
-            display: inline-block;
-        }
-        
-        #archivoInput {
-            display: none;
-        }
-        
-        .tabla-contenedor {
-            margin-top: 20px;
-            overflow-x: auto;
-            border: 1px solid #e2e8f0;
-            border-radius: 4px;
-            max-height: 400px;
-            overflow-y: auto;
-        }
-        
-        .tabla-datos {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-        }
-        
-        .tabla-datos th {
-            background-color: #f8fafc;
-            color: #1f2937;
-            font-weight: 600;
-            padding: 12px;
-            text-align: left;
-            border-bottom: 2px solid #e2e8f0;
-            position: sticky;
-            top: 0;
-        }
-        
-        .tabla-datos td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #e2e8f0;
-        }
-        
-        .tabla-datos tr:hover {
-            background-color: #f8fafc;
-        }
-        
-        .alerta {
-            padding: 12px 16px;
-            border-radius: 4px;
-            margin-bottom: 16px;
-            display: none;
-        }
-        
-        .alerta.error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border-left: 4px solid #dc2626;
-            display: block;
-        }
-        
-        .alerta.exito {
-            background-color: #dcfce7;
-            color: #166534;
-            border-left: 4px solid #22c55e;
-            display: block;
-        }
-        
-        .cargador {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-        
-        .cargador.activo {
-            display: block;
-        }
-        
-        .spinner {
-            border: 3px solid #e2e8f0;
-            border-top: 3px solid #0d9488;
-            border-radius: 50%;
-            width: 24px;
-            height: 24px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-    </style>
+    <title>Generador de Boletines</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-    <div class="container">
-        <h1>Procesador Automático de Datos</h1>
-        
-        <div class="estado" id="estado">Estado: Ningún archivo cargado.</div>
-        
-        <div class="alerta error" id="alertaError"></div>
-        <div class="alerta exito" id="alertaExito"></div>
-        
-        <div class="controles">
-            <div class="input-file">
-                <button id="btnCargar">Cargar Excel</button>
-                <input type="file" id="archivoInput" accept=".xlsx" />
-            </div>
-            <button id="btnProcesar" disabled>Procesar Datos</button>
-            <button id="btnDescargar" disabled>Guardar Resultado</button>
-        </div>
-        
-        <div class="cargador" id="cargador">
-            <div class="spinner"></div>
-            <p>Procesando...</p>
-        </div>
-        
-        <div class="tabla-contenedor" id="tablaContenedor" style="display: none;">
-            <table class="tabla-datos" id="tabla">
-                <thead></thead>
-                <tbody></tbody>
-            </table>
-        </div>
-    </div>
+    <main class="container">
+        <section class="card">
+            <h1>Generador de Boletines</h1>
+            <p class="subtitle">Carga tu archivo Excel, selecciona periodos y descarga el reporte final.</p>
+
+            {% if error %}
+            <div class="alert" role="alert">{{ error }}</div>
+            {% endif %}
+
+            <form method="post" action="{{ url_for('generar') }}" enctype="multipart/form-data">
+                <label class="label" for="archivo_excel">Archivo Excel (.xlsx)</label>
+                <input id="archivo_excel" name="archivo_excel" type="file" accept=".xlsx" required>
+
+                <fieldset>
+                    <legend>Periodos a incluir</legend>
+                    <div class="periodos-actions">
+                        <button type="button" class="btn-link" id="btn_periodos_todos">Seleccionar todos</button>
+                        <button type="button" class="btn-link" id="btn_periodos_limpiar">Limpiar seleccion</button>
+                    </div>
+                    <div class="periodos">
+                        {% for periodo in periodos %}
+                        <label class="checkbox-item">
+                            <input
+                                type="checkbox"
+                                name="periodos"
+                                value="{{ periodo }}"
+                                {% if periodo in periodos_default %}checked{% endif %}
+                            >
+                            <span>{{ periodo }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Configuracion de salida</legend>
+
+                    <div class="form-row">
+                        <label class="row-label">Formato</label>
+                        <div class="options-inline">
+                            <label><input type="radio" name="formato" value="excel" {% if config.formato == 'excel' %}checked{% endif %}> Excel</label>
+                            <label><input type="radio" name="formato" value="pdf" {% if config.formato == 'pdf' %}checked{% endif %}> PDF</label>
+                            <label><input type="radio" name="formato" value="word" {% if config.formato == 'word' %}checked{% endif %}> Word</label>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <label>
+                            <span class="mini-label">Estudiantes por fila</span>
+                            <input type="number" name="estudiantes_por_fila" min="1" max="12" value="{{ config.estudiantes_por_fila }}">
+                        </label>
+                        <label>
+                            <span class="mini-label">Filas por hoja</span>
+                            <input type="number" name="filas_por_hoja" min="1" max="10" value="{{ config.filas_por_hoja }}">
+                        </label>
+                    </div>
+
+                    <div class="form-row top-gap">
+                        <label class="row-label">Tamano de pagina</label>
+                        <div class="options-inline">
+                            <label><input type="radio" name="tamano_pagina" value="carta" {% if config.tamano_pagina == 'carta' %}checked{% endif %}> Carta</label>
+                            <label><input type="radio" name="tamano_pagina" value="a4" {% if config.tamano_pagina == 'a4' %}checked{% endif %}> A4</label>
+                            <label><input id="tamano_custom_radio" type="radio" name="tamano_pagina" value="custom" {% if config.tamano_pagina == 'custom' %}checked{% endif %}> Personalizado</label>
+                        </div>
+                    </div>
+
+                    <div class="grid-2" id="custom_size_fields">
+                        <label>
+                            <span class="mini-label">Ancho (cm)</span>
+                            <input type="number" step="0.01" name="pagina_ancho_cm" value="{{ config.pagina_ancho_cm }}">
+                        </label>
+                        <label>
+                            <span class="mini-label">Alto (cm)</span>
+                            <input type="number" step="0.01" name="pagina_alto_cm" value="{{ config.pagina_alto_cm }}">
+                        </label>
+                    </div>
+
+                    <div class="form-row top-gap">
+                        <label class="row-label">Orientacion</label>
+                        <div class="options-inline">
+                            <label><input type="radio" name="orientacion" value="vertical" {% if config.orientacion == 'vertical' %}checked{% endif %}> Vertical</label>
+                            <label><input type="radio" name="orientacion" value="horizontal" {% if config.orientacion == 'horizontal' %}checked{% endif %}> Horizontal</label>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <button type="submit">Generar Reporte</button>
+            </form>
+        </section>
+    </main>
 
     <script>
-        const btnCargar = document.getElementById("btnCargar");
-        const btnProcesar = document.getElementById("btnProcesar");
-        const btnDescargar = document.getElementById("btnDescargar");
-        const archivoInput = document.getElementById("archivoInput");
-        const estado = document.getElementById("estado");
-        const alertaError = document.getElementById("alertaError");
-        const alertaExito = document.getElementById("alertaExito");
-        const cargador = document.getElementById("cargador");
-        const tablaContenedor = document.getElementById("tablaContenedor");
-        const tabla = document.getElementById("tabla");
-        
-        let archivoNombre = null;
-        
-        btnCargar.addEventListener("click", () => {
-            archivoInput.click();
+        const radiosTamano = document.querySelectorAll('input[name="tamano_pagina"]');
+        const customSizeFields = document.getElementById('custom_size_fields');
+        const checkboxesPeriodos = document.querySelectorAll('input[name="periodos"]');
+        const btnPeriodosTodos = document.getElementById('btn_periodos_todos');
+        const btnPeriodosLimpiar = document.getElementById('btn_periodos_limpiar');
+
+        function actualizarCamposCustom() {
+            const seleccionado = document.querySelector('input[name="tamano_pagina"]:checked');
+            const visible = seleccionado && seleccionado.value === 'custom';
+            customSizeFields.classList.toggle('hidden', !visible);
+        }
+
+        radiosTamano.forEach((radio) => {
+            radio.addEventListener('change', actualizarCamposCustom);
         });
-        
-        archivoInput.addEventListener("change", cargarArchivo);
-        btnProcesar.addEventListener("click", procesarDatos);
-        btnDescargar.addEventListener("click", descargarResultado);
-        
-        async function cargarArchivo() {
-            const file = archivoInput.files[0];
-            if (!file) return;
-            
-            mostrarCargador(true);
-            limpiarAlertas();
-            
-            const formData = new FormData();
-            formData.append("archivo", file);
-            
-            try {
-                const response = await fetch("/cargar", {
-                    method: "POST",
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    archivoNombre = data.nombre;
-                    estado.textContent = `Estado: Archivo cargado → ${data.nombre}`;
-                    mostrarTabla(data.tabla);
-                    btnProcesar.disabled = false;
-                    btnDescargar.disabled = true;
-                    mostrarExito(`Archivo cargado: ${data.nombre}`);
-                } else {
-                    mostrarError(data.error);
-                }
-            } catch (error) {
-                mostrarError(`Error al cargar: ${error.message}`);
-            } finally {
-                mostrarCargador(false);
-            }
-        }
-        
-        async function procesarDatos() {
-            mostrarCargador(true);
-            limpiarAlertas();
-            
-            try {
-                const response = await fetch("/procesar", {
-                    method: "POST"
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    estado.textContent = "Estado: Datos procesados correctamente. Columna ACUM creada.";
-                    mostrarTabla(data.tabla);
-                    btnDescargar.disabled = false;
-                    mostrarExito("Datos procesados correctamente.");
-                } else {
-                    mostrarError(data.error);
-                }
-            } catch (error) {
-                mostrarError(`Error al procesar: ${error.message}`);
-            } finally {
-                mostrarCargador(false);
-            }
-        }
-        
-        async function descargarResultado() {
-            try {
-                const response = await fetch("/descargar", {
-                    method: "POST"
-                });
-                
-                if (!response.ok) {
-                    const data = await response.json();
-                    mostrarError(data.error);
-                    return;
-                }
-                
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = archivoNombre ? archivoNombre.replace(".xlsx", "_procesado.xlsx") : "resultado_procesado.xlsx";
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-                
-                estado.textContent = "Estado: Resultado guardado correctamente.";
-                mostrarExito("Archivo descargado exitosamente.");
-            } catch (error) {
-                mostrarError(`Error al descargar: ${error.message}`);
-            }
-        }
-        
-        function mostrarTabla(html) {
-            tabla.innerHTML = html;
-            tablaContenedor.style.display = "block";
-        }
-        
-        function mostrarCargador(visible) {
-            cargador.classList.toggle("activo", visible);
-        }
-        
-        function mostrarError(mensaje) {
-            alertaError.textContent = mensaje;
-            alertaError.style.display = "block";
-            alertaExito.style.display = "none";
-            estado.textContent = "Estado: Error al procesar.";
-        }
-        
-        function mostrarExito(mensaje) {
-            alertaExito.textContent = mensaje;
-            alertaExito.style.display = "block";
-            alertaError.style.display = "none";
-        }
-        
-        function limpiarAlertas() {
-            alertaError.style.display = "none";
-            alertaExito.style.display = "none";
-        }
+
+        btnPeriodosTodos.addEventListener('click', () => {
+            checkboxesPeriodos.forEach((checkbox) => {
+                checkbox.checked = true;
+            });
+        });
+
+        btnPeriodosLimpiar.addEventListener('click', () => {
+            checkboxesPeriodos.forEach((checkbox) => {
+                checkbox.checked = false;
+            });
+        });
+
+        actualizarCamposCustom();
     </script>
 </body>
 </html>

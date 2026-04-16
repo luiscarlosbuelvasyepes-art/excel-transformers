@@ -1,154 +1,153 @@
+import math
 import os
+import re
+from datetime import datetime
 from io import BytesIO
 
 import pandas as pd
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, jsonify, render_template, request, send_file
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+try:
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.units import cm as rl_cm
+    from reportlab.platypus import PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    REPORTLAB_OK = True
+except ImportError:
+    REPORTLAB_OK = False
+
+try:
+    from docx import Document as DocxDocument
+    from docx.enum.section import WD_ORIENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm as DocxCm
+    from docx.shared import Pt
+
+    DOCX_OK = True
+except ImportError:
+    DOCX_OK = False
+
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
-df_original = None
-df_procesado = None
-archivo_nombre = None
+PERIODOS = ["001", "002", "003", "FINAL"]
+METRICAS_BASE = ["PROM", "PUESTO", "REPR", "ART", "CNT", "CPM", "EDF", "EMPIN"]
+ALIAS_METRICAS = {
+    "prom": "PROM",
+    "promedio": "PROM",
+    "puesto": "PUESTO",
+    "repr": "REPR",
+    "art": "ART",
+    "cnt": "CNT",
+    "cpm": "CPM",
+    "edf": "EDF",
+    "empi": "EMPIN",
+    "empin": "EMPIN",
+}
+ALIAS_ESTUDIANTE = [
+    "estudiante",
+    "alumno",
+    "alumna",
+    "nombre",
+    "nombres",
+    "est",
+    "id",
+    "identificacion",
+    "codigo",
+    "documento",
+]
+ALIAS_PERIODO = ["periodo", "periodo academico", "periodo aca", "corte", "lapso"]
+PATRONES_NO_ESTUDIANTE = [
+    r"^\d+\.?\s*desempe[nñ]o",
+    r"^desempe[nñ]o",
+    r"consolidado",
+    r"del curso",
+    r"^grupo\b",
+    r"totales?",
+    r"resumen",
+]
+TAMANIO_PAGINAS = {
+    "carta": (21.59, 27.94),
+    "a4": (21.00, 29.70),
+}
 
 
-@app.route("/health", methods=["GET"])
-def health():
-    return {"status": "ok"}, 200
+def normalizar_texto(valor: object) -> str:
+    if pd.isna(valor):
+        return ""
+    texto = str(valor).strip()
+    texto = re.sub(r"\s+", " ", texto)
+    return texto
 
 
-@app.route("/", methods=["GET"])
-def index():
-    return render_template("index.html")
+def clave_texto(valor: object) -> str:
+    texto = normalizar_texto(valor).lower()
+    texto = (
+        texto.replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ú", "u")
+    )
+    return texto
 
 
-@app.route("/cargar", methods=["POST"])
-def cargar_archivo():
-    global df_original, df_procesado, archivo_nombre
-    
-    try:
-        if "archivo" not in request.files:
-            return jsonify({"error": "No se seleccionó archivo"}), 400
-        
-        archivo = request.files["archivo"]
-        if archivo.filename == "":
-            return jsonify({"error": "Nombre de archivo vacío"}), 400
-        
-        if not archivo.filename.lower().endswith(".xlsx"):
-            return jsonify({"error": "Solo se permiten archivos .xlsx"}), 400
-        
-        df = pd.read_excel(archivo)
-        
-        if df.shape[1] < 2:
-            return jsonify({"error": "El archivo debe tener al menos dos columnas"}), 400
-        
-        df_original = df
-        df_procesado = None
-        archivo_nombre = archivo.filename
-        
-        # Convertir DataFrame a tabla HTML
-        tabla_html = df.fillna("").to_html(classes="tabla-datos", index=False)
-        
-        return jsonify({
-            "success": True,
-            "nombre": archivo_nombre,
-            "filas": len(df),
-            "columnas": len(df.columns),
-            "tabla": tabla_html
-        })
-    
-    except Exception as error:
-        return jsonify({"error": f"Error al cargar archivo: {str(error)}"}), 500
+def contiene_letras(valor: object) -> bool:
+    texto = normalizar_texto(valor)
+    return bool(re.search(r"[A-Za-zÁÉÍÓÚáéíóúÑñ]", texto))
 
 
-@app.route("/procesar", methods=["POST"])
-def procesar():
-    global df_original, df_procesado
-    
-    try:
-        if df_original is None:
-            return jsonify({"error": "Primero debes cargar un archivo"}), 400
-        
-        df = df_original.copy()
-        
-        # Eliminar filas completamente vacías
-        df = df.dropna(how="all")
-        
-        if df.empty:
-            return jsonify({"error": "No hay filas válidas para procesar"}), 400
-        
-        # Segunda columna por posición, reemplazar vacíos por 0
-        nombre_segunda_columna = df.columns[1]
-        segunda_columna_numerica = pd.to_numeric(df[nombre_segunda_columna], errors="coerce")
-        segunda_columna_numerica = segunda_columna_numerica.fillna(0)
-        df[nombre_segunda_columna] = segunda_columna_numerica
-        
-        # Calcular columna ACUM
-        df["ACUM"] = segunda_columna_numerica.cumsum()
-        
-        df_procesado = df
-        
-        # Convertir a tabla HTML
-        tabla_html = df.fillna("").to_html(classes="tabla-datos", index=False)
-        
-        return jsonify({
-            "success": True,
-            "mensaje": "Datos procesados correctamente",
-            "filas": len(df),
-            "columnas": len(df.columns),
-            "tabla": tabla_html
-        })
-    
-    except Exception as error:
-        return jsonify({"error": f"Error al procesar: {str(error)}"}), 500
+def parece_numero(valor: object) -> bool:
+    if pd.isna(valor):
+        return False
+    texto = normalizar_texto(valor).replace(",", ".")
+    if not texto:
+        return False
+    return bool(re.fullmatch(r"[-+]?\d+(\.\d+)?", texto))
 
 
-@app.route("/descargar", methods=["POST"])
-def descargar():
-    global df_procesado, archivo_nombre
-    
-    try:
-        if df_procesado is None:
-            return jsonify({"error": "Primero debes procesar los datos"}), 400
-        
-        # Generar nombre del archivo descargado
-        if archivo_nombre:
-            nombre_salida = archivo_nombre.replace(".xlsx", "_procesado.xlsx")
-        else:
-            nombre_salida = "resultado_procesado.xlsx"
-        
-        # Guardar a BytesIO
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df_procesado.to_excel(writer, index=False, sheet_name="Datos")
-        
-        output.seek(0)
-        
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name=nombre_salida,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    
-    except Exception as error:
-        return jsonify({"error": f"Error al descargar: {str(error)}"}), 500
+def es_columna_auxiliar(columna: object) -> bool:
+    return bool(re.fullmatch(r"col_\d+(?:_\d+)?", clave_texto(columna)))
 
 
-@app.errorhandler(413)
-def archivo_muy_grande(_error):
-    return jsonify({"error": "El archivo supera el tamaño permitido de 16 MB"}), 413
+def es_etiqueta_estudiante_valida(texto: str) -> bool:
+    if not texto:
+        return False
+
+    clave = clave_texto(texto)
+    if len(clave) < 4:
+        return False
+
+    if not contiene_letras(texto):
+        return False
+
+    for patron in PATRONES_NO_ESTUDIANTE:
+        if re.search(patron, clave):
+            return False
+
+    return True
 
 
-if __name__ == "__main__":
-    puerto = int(os.environ.get("PORT", "5000"))
-    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(debug=debug, host="0.0.0.0", port=puerto)
+def nombre_columna_unico(nombre: str, usados: set[str]) -> str:
+    base = nombre or "COL"
+    candidato = base
+    sufijo = 2
+    while candidato in usados:
+        candidato = f"{base}_{sufijo}"
+        sufijo += 1
+    usados.add(candidato)
+    return candidato
 
 
+def detectar_fila_encabezado(df: pd.DataFrame) -> int:
     mejor_indice = 0
     mejor_puntaje = -1
     limite = min(len(df), 20)
+
     for indice in range(limite):
         puntaje = 0
         for valor in df.iloc[indice].tolist():
@@ -164,6 +163,7 @@ if __name__ == "__main__":
         if puntaje > mejor_puntaje:
             mejor_puntaje = puntaje
             mejor_indice = indice
+
     return mejor_indice
 
 
@@ -446,44 +446,174 @@ def aplicar_logica_nivelacion(matriz: pd.DataFrame, periodos: list[str]) -> pd.D
     return resultado
 
 
-def nombre_hoja_seguro(nombre: str, usadas: set[str]) -> str:
-    limpio = re.sub(r"[\\/*?:\[\]]", "_", nombre).strip()
-    if not limpio:
-        limpio = "Estudiante"
-    base = limpio[:31]
-    candidato = base
-    i = 2
-    while candidato in usadas:
-        sufijo = f"_{i}"
-        candidato = f"{base[:31 - len(sufijo)]}{sufijo}"
-        i += 1
-    usadas.add(candidato)
-    return candidato
+def obtener_configuracion_pagina(estudiantes_por_fila: int, filas_por_hoja: int) -> tuple[int, int]:
+    if estudiantes_por_fila <= 0 or filas_por_hoja <= 0:
+        raise ValueError("Estudiantes por fila y filas por hoja deben ser mayores a cero.")
+    return estudiantes_por_fila, filas_por_hoja
 
 
-def construir_excel_reporte(reportes: dict[str, pd.DataFrame], periodos: list[str]) -> BytesIO:
-    libro = Workbook()
-    hoja_resumen = libro.active
-    hoja_resumen.title = "Resumen"
+def es_orientacion_horizontal(orientacion: str) -> bool:
+    return orientacion == "horizontal"
 
-    hoja_resumen.append(["Estudiante", "Periodo", "PROM", "Nivelacion", "Requiere Nivelacion"])
-    usadas: set[str] = {"Resumen"}
 
-    for estudiante, matriz in reportes.items():
-        hoja = libro.create_sheet(title=nombre_hoja_seguro(estudiante, usadas))
-        hoja.append(["METRICA", *periodos])
-        for metrica in matriz.index.tolist():
-            hoja.append([metrica, *[matriz.loc[metrica, p] if p in matriz.columns else "" for p in periodos]])
+def obtener_tamano_pagina_orientado(
+    tamano_pagina: str,
+    pagina_ancho_cm: float,
+    pagina_alto_cm: float,
+    orientacion: str,
+) -> tuple[float, float]:
+    if tamano_pagina in TAMANIO_PAGINAS:
+        ancho_cm, alto_cm = TAMANIO_PAGINAS[tamano_pagina]
+    else:
+        ancho_cm, alto_cm = pagina_ancho_cm, pagina_alto_cm
 
-        for periodo in periodos:
-            prom = matriz.loc["PROM", periodo] if "PROM" in matriz.index and periodo in matriz.columns else ""
-            niv = matriz.loc["NIVELACION", periodo] if "NIVELACION" in matriz.index and periodo in matriz.columns else ""
-            req = (
-                matriz.loc["REQUIERE_NIVELACION", periodo]
-                if "REQUIERE_NIVELACION" in matriz.index and periodo in matriz.columns
-                else ""
+    if es_orientacion_horizontal(orientacion):
+        return max(ancho_cm, alto_cm), min(ancho_cm, alto_cm)
+    return min(ancho_cm, alto_cm), max(ancho_cm, alto_cm)
+
+
+def configurar_hoja_excel(hoja, tamano_pagina: str, orientacion: str) -> None:
+    if tamano_pagina == "carta":
+        hoja.page_setup.paperSize = hoja.PAPERSIZE_LETTER
+    else:
+        hoja.page_setup.paperSize = hoja.PAPERSIZE_A4
+
+    hoja.page_setup.orientation = "landscape" if es_orientacion_horizontal(orientacion) else "portrait"
+    hoja.page_setup.fitToWidth = 1
+    hoja.page_setup.fitToHeight = 1
+    hoja.sheet_view.showGridLines = False
+    hoja.page_margins.left = 0.2
+    hoja.page_margins.right = 0.2
+    hoja.page_margins.top = 0.3
+    hoja.page_margins.bottom = 0.3
+
+
+def escribir_bloque_estudiante_excel(
+    hoja,
+    fila_inicio: int,
+    columna_inicio: int,
+    estudiante: str,
+    matriz: pd.DataFrame,
+    metricas: list[str],
+    periodos: list[str],
+) -> None:
+    relleno_titulo = PatternFill("solid", fgColor="D9D9D9")
+    relleno_encabezado = PatternFill("solid", fgColor="EDEDED")
+    borde = Border(
+        left=Side(style="thin", color="808080"),
+        right=Side(style="thin", color="808080"),
+        top=Side(style="thin", color="808080"),
+        bottom=Side(style="thin", color="808080"),
+    )
+    centrado = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    fuente_titulo = Font(name="Calibri", size=10, bold=True)
+    fuente_normal = Font(name="Calibri", size=9)
+    ultima_columna = columna_inicio + len(periodos)
+
+    hoja.merge_cells(
+        start_row=fila_inicio,
+        start_column=columna_inicio,
+        end_row=fila_inicio,
+        end_column=ultima_columna,
+    )
+    celda_titulo = hoja.cell(row=fila_inicio, column=columna_inicio, value=estudiante)
+    celda_titulo.fill = relleno_titulo
+    celda_titulo.border = borde
+    celda_titulo.alignment = centrado
+    celda_titulo.font = fuente_titulo
+
+    for columna_offset, periodo in enumerate(["", *periodos]):
+        celda = hoja.cell(row=fila_inicio + 1, column=columna_inicio + columna_offset, value=periodo)
+        celda.fill = relleno_encabezado
+        celda.border = borde
+        celda.alignment = centrado
+        celda.font = fuente_titulo
+
+    for fila_offset, metrica in enumerate(metricas, start=2):
+        celda_metrica = hoja.cell(row=fila_inicio + fila_offset, column=columna_inicio, value=metrica)
+        celda_metrica.fill = relleno_encabezado
+        celda_metrica.border = borde
+        celda_metrica.alignment = centrado
+        celda_metrica.font = fuente_titulo
+
+        for columna_offset, periodo in enumerate(periodos, start=1):
+            valor = matriz.loc[metrica, periodo] if metrica in matriz.index and periodo in matriz.columns else ""
+            celda_valor = hoja.cell(
+                row=fila_inicio + fila_offset,
+                column=columna_inicio + columna_offset,
+                value=valor,
             )
-            hoja_resumen.append([estudiante, periodo, prom, niv, req])
+            celda_valor.border = borde
+            celda_valor.alignment = centrado
+            celda_valor.font = fuente_normal
+
+    for columna in range(columna_inicio, ultima_columna + 1):
+        hoja.cell(row=fila_inicio, column=columna).border = borde
+
+
+def ajustar_anchos_hoja_excel(hoja, columnas_por_bloque: int) -> None:
+    for columna in range(1, hoja.max_column + 1):
+        letra = get_column_letter(columna)
+        maximo = 0
+        for celda in hoja[letra]:
+            valor = "" if celda.value is None else str(celda.value)
+            maximo = max(maximo, len(valor))
+
+        if (columna - 1) % columnas_por_bloque == 0:
+            hoja.column_dimensions[letra].width = min(max(maximo + 2, 10), 18)
+        else:
+            hoja.column_dimensions[letra].width = min(max(maximo + 2, 7), 12)
+
+
+def construir_excel_reporte(
+    reportes: dict[str, pd.DataFrame],
+    periodos: list[str],
+    metricas: list[str],
+    estudiantes_por_fila: int,
+    filas_por_hoja: int,
+    tamano_pagina: str,
+    orientacion: str,
+) -> BytesIO:
+    libro = Workbook()
+    libro.remove(libro.active)
+
+    estudiantes_por_fila, filas_por_hoja = obtener_configuracion_pagina(estudiantes_por_fila, filas_por_hoja)
+    columnas_por_bloque = 1 + len(periodos)
+
+    alto_contenido = 2 + len(metricas)
+    alto_separacion = 1
+    alto_bloque = alto_contenido + alto_separacion
+
+    estudiantes = list(reportes.items())
+    por_hoja = estudiantes_por_fila * filas_por_hoja
+
+    for inicio in range(0, len(estudiantes), por_hoja):
+        hoja = libro.create_sheet(title=f"Pagina_{inicio // por_hoja + 1}")
+        configurar_hoja_excel(hoja, tamano_pagina, orientacion)
+
+        for indice_bloque, (estudiante, matriz) in enumerate(estudiantes[inicio : inicio + por_hoja]):
+            fila_bloque = indice_bloque // estudiantes_por_fila
+            columna_bloque = indice_bloque % estudiantes_por_fila
+            fila_inicio = 1 + fila_bloque * alto_bloque
+            columna_inicio = 1 + columna_bloque * columnas_por_bloque
+
+            escribir_bloque_estudiante_excel(
+                hoja,
+                fila_inicio,
+                columna_inicio,
+                estudiante,
+                matriz,
+                metricas,
+                periodos,
+            )
+
+            hoja.row_dimensions[fila_inicio].height = 18
+            hoja.row_dimensions[fila_inicio + 1].height = 14
+            for fila_offset in range(2, alto_contenido):
+                hoja.row_dimensions[fila_inicio + fila_offset].height = 13
+            hoja.row_dimensions[fila_inicio + alto_contenido].height = 8
+
+        ajustar_anchos_hoja_excel(hoja, columnas_por_bloque)
 
     salida = BytesIO()
     libro.save(salida)
@@ -491,29 +621,323 @@ def construir_excel_reporte(reportes: dict[str, pd.DataFrame], periodos: list[st
     return salida
 
 
-def generar_reportes_desde_excel(file_storage, periodos: list[str]) -> BytesIO:
+def construir_pdf_reporte(
+    reportes: dict[str, pd.DataFrame],
+    periodos: list[str],
+    metricas: list[str],
+    estudiantes_por_fila: int,
+    filas_por_hoja: int,
+    tamano_pagina: str,
+    orientacion: str,
+    pagina_ancho_cm: float,
+    pagina_alto_cm: float,
+) -> BytesIO:
+    if not REPORTLAB_OK:
+        raise ValueError("Para exportar a PDF instala reportlab (pip install reportlab).")
+
+    ancho_cm, alto_cm = obtener_tamano_pagina_orientado(
+        tamano_pagina,
+        pagina_ancho_cm,
+        pagina_alto_cm,
+        orientacion,
+    )
+    ancho_pt = ancho_cm * rl_cm
+    alto_pt = alto_cm * rl_cm
+
+    estudiantes_por_fila, filas_por_hoja = obtener_configuracion_pagina(estudiantes_por_fila, filas_por_hoja)
+    por_hoja = estudiantes_por_fila * filas_por_hoja
+
+    num_periodos = len(periodos)
+    margen_pt = 0.5 * rl_cm
+    disponible = ancho_pt - 2 * margen_pt
+    gap_pt = 3
+    bloque_pt = (disponible - gap_pt * (estudiantes_por_fila - 1)) / estudiantes_por_fila
+    col_label_pt = bloque_pt * 0.30
+    col_per_pt = (bloque_pt - col_label_pt) / num_periodos
+    col_anchos = [col_label_pt] + [col_per_pt] * num_periodos
+    altos = [14, 11] + [10] * len(metricas)
+
+    estilo_inner = TableStyle(
+        [
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.4, rl_colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), rl_colors.HexColor("#D9D9D9")),
+            ("BACKGROUND", (0, 1), (-1, 1), rl_colors.HexColor("#EDEDED")),
+            ("BACKGROUND", (0, 2), (0, -1), rl_colors.HexColor("#EDEDED")),
+            ("FONTNAME", (0, 0), (-1, 1), "Helvetica-Bold"),
+            ("FONTNAME", (0, 2), (0, -1), "Helvetica-Bold"),
+            ("SPAN", (0, 0), (-1, 0)),
+        ]
+    )
+
+    def tabla_estudiante(nombre_estudiante: str, matriz_estudiante: pd.DataFrame):
+        encabezado = [nombre_estudiante] + [""] * num_periodos
+        sub = [""] + periodos
+        datos = [encabezado, sub]
+        for metrica in metricas:
+            fila = [metrica]
+            for periodo in periodos:
+                valor = ""
+                if metrica in matriz_estudiante.index and periodo in matriz_estudiante.columns:
+                    raw = matriz_estudiante.loc[metrica, periodo]
+                    valor = "" if raw == "" else str(raw)
+                fila.append(valor)
+            datos.append(fila)
+
+        tabla = Table(datos, colWidths=col_anchos, rowHeights=altos)
+        tabla.setStyle(estilo_inner)
+        return tabla
+
+    story = []
+    todos = list(reportes.items())
+    primera_pagina = True
+
+    for inicio in range(0, len(todos), por_hoja):
+        if not primera_pagina:
+            story.append(PageBreak())
+        primera_pagina = False
+
+        grupo = todos[inicio : inicio + por_hoja]
+        for fila_indice in range(0, len(grupo), estudiantes_por_fila):
+            fila_ests = grupo[fila_indice : fila_indice + estudiantes_por_fila]
+            tablas = [tabla_estudiante(nombre, matriz) for nombre, matriz in fila_ests]
+
+            while len(tablas) < estudiantes_por_fila:
+                n_filas = 2 + len(metricas)
+                t_vacio = Table([[""] * (1 + num_periodos)] * n_filas, colWidths=col_anchos, rowHeights=altos)
+                tablas.append(t_vacio)
+
+            maestra = Table([tablas], colWidths=[bloque_pt] * estudiantes_por_fila, hAlign="LEFT")
+            maestra.setStyle(
+                TableStyle(
+                    [
+                        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), gap_pt),
+                        ("TOPPADDING", (0, 0), (-1, -1), 0),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ]
+                )
+            )
+            story.append(maestra)
+            story.append(Spacer(1, 6))
+
+    salida = BytesIO()
+    SimpleDocTemplate(
+        salida,
+        pagesize=(ancho_pt, alto_pt),
+        leftMargin=margen_pt,
+        rightMargin=margen_pt,
+        topMargin=margen_pt,
+        bottomMargin=margen_pt,
+    ).build(story)
+    salida.seek(0)
+    return salida
+
+
+def construir_word_reporte(
+    reportes: dict[str, pd.DataFrame],
+    periodos: list[str],
+    metricas: list[str],
+    estudiantes_por_fila: int,
+    filas_por_hoja: int,
+    tamano_pagina: str,
+    orientacion: str,
+    pagina_ancho_cm: float,
+    pagina_alto_cm: float,
+) -> BytesIO:
+    if not DOCX_OK:
+        raise ValueError("Para exportar a Word instala python-docx (pip install python-docx).")
+
+    ancho_cm, alto_cm = obtener_tamano_pagina_orientado(
+        tamano_pagina,
+        pagina_ancho_cm,
+        pagina_alto_cm,
+        orientacion,
+    )
+
+    estudiantes_por_fila, filas_por_hoja = obtener_configuracion_pagina(estudiantes_por_fila, filas_por_hoja)
+    por_hoja = estudiantes_por_fila * filas_por_hoja
+    cols_por_est = 1 + len(periodos)
+
+    documento = DocxDocument()
+    seccion = documento.sections[0]
+    seccion.orientation = WD_ORIENT.LANDSCAPE if es_orientacion_horizontal(orientacion) else WD_ORIENT.PORTRAIT
+    seccion.page_width = DocxCm(ancho_cm)
+    seccion.page_height = DocxCm(alto_cm)
+    seccion.left_margin = DocxCm(0.8)
+    seccion.right_margin = DocxCm(0.8)
+    seccion.top_margin = DocxCm(0.8)
+    seccion.bottom_margin = DocxCm(0.8)
+
+    todos = list(reportes.items())
+    primera_pagina = True
+
+    for inicio in range(0, len(todos), por_hoja):
+        if not primera_pagina:
+            documento.add_page_break()
+        primera_pagina = False
+
+        grupo = todos[inicio : inicio + por_hoja]
+        num_filas_tabla = 2 + len(metricas)
+
+        for fila_indice in range(0, len(grupo), estudiantes_por_fila):
+            fila_ests = grupo[fila_indice : fila_indice + estudiantes_por_fila]
+            cantidad_est = len(fila_ests)
+            total_cols = cantidad_est * cols_por_est
+
+            tabla = documento.add_table(rows=num_filas_tabla, cols=total_cols)
+            tabla.style = "Table Grid"
+
+            ancho_disp = ancho_cm - 1.6
+            ancho_label = (ancho_disp / cantidad_est) * 0.30
+            ancho_periodo = ((ancho_disp / cantidad_est) - ancho_label) / max(len(periodos), 1)
+
+            for col_est, (nombre_est, matriz) in enumerate(fila_ests):
+                col_base = col_est * cols_por_est
+
+                celda_titulo = tabla.cell(0, col_base)
+                for col in range(1, cols_por_est):
+                    celda_titulo = celda_titulo.merge(tabla.cell(0, col_base + col))
+
+                p_titulo = celda_titulo.paragraphs[0]
+                p_titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run_titulo = p_titulo.add_run(str(nombre_est).upper())
+                run_titulo.bold = True
+                run_titulo.font.size = Pt(7)
+
+                for offset, texto in enumerate([""] + periodos):
+                    p = tabla.cell(1, col_base + offset).paragraphs[0]
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    r = p.add_run(texto)
+                    r.bold = True
+                    r.font.size = Pt(7)
+
+                for fila_offset, metrica in enumerate(metricas, start=2):
+                    p_met = tabla.cell(fila_offset, col_base).paragraphs[0]
+                    p_met.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    r_met = p_met.add_run(metrica)
+                    r_met.bold = True
+                    r_met.font.size = Pt(7)
+
+                    for col_offset, periodo in enumerate(periodos, start=1):
+                        valor = ""
+                        if metrica in matriz.index and periodo in matriz.columns:
+                            raw = matriz.loc[metrica, periodo]
+                            valor = "" if raw == "" else str(raw)
+
+                        p_val = tabla.cell(fila_offset, col_base + col_offset).paragraphs[0]
+                        p_val.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        r_val = p_val.add_run(valor)
+                        r_val.font.size = Pt(7)
+
+            for col_est in range(cantidad_est):
+                col_base = col_est * cols_por_est
+                for row in tabla.rows:
+                    for col_offset in range(cols_por_est):
+                        celda = row.cells[col_base + col_offset]
+                        celda.width = DocxCm(ancho_label if col_offset == 0 else ancho_periodo)
+
+            documento.add_paragraph("")
+
+    salida = BytesIO()
+    documento.save(salida)
+    salida.seek(0)
+    return salida
+
+
+def generar_reportes_desde_excel(archivo_excel, periodos: list[str]) -> tuple[dict[str, pd.DataFrame], list[str]]:
     if not periodos:
         raise ValueError("Debes seleccionar al menos un periodo.")
 
-    df_raw = pd.read_excel(file_storage, header=None, dtype=object)
+    df_raw = pd.read_excel(archivo_excel, header=None, dtype=object)
     df_datos = preparar_dataframe(df_raw)
-    df_normalizado, metricas = normalizar_tabla_fuente(df_datos)
+    df_normalizado, metricas_base = normalizar_tabla_fuente(df_datos)
 
     reportes: dict[str, pd.DataFrame] = {}
     for estudiante, grupo in df_normalizado.groupby("_estudiante", sort=True):
-        matriz = crear_matriz_estudiante(grupo, metricas, periodos)
-        matriz = aplicar_logica_nivelacion(matriz, periodos)
+        matriz = crear_matriz_estudiante(grupo, metricas_base, periodos)
         reportes[estudiante] = matriz
 
     if not reportes:
         raise ValueError("No se generaron reportes individuales.")
 
-    return construir_excel_reporte(reportes, periodos)
+    return reportes, metricas_base
+
+
+def config_por_defecto() -> dict[str, object]:
+    return {
+        "formato": "excel",
+        "estudiantes_por_fila": 7,
+        "filas_por_hoja": 3,
+        "tamano_pagina": "carta",
+        "orientacion": "horizontal",
+        "pagina_ancho_cm": 21.59,
+        "pagina_alto_cm": 27.94,
+    }
+
+
+def leer_config_formulario(formulario) -> dict[str, object]:
+    config = config_por_defecto()
+
+    config["formato"] = formulario.get("formato", str(config["formato"]))
+    config["tamano_pagina"] = formulario.get("tamano_pagina", str(config["tamano_pagina"]))
+    config["orientacion"] = formulario.get("orientacion", str(config["orientacion"]))
+
+    try:
+        config["estudiantes_por_fila"] = int(formulario.get("estudiantes_por_fila", config["estudiantes_por_fila"]))
+        config["filas_por_hoja"] = int(formulario.get("filas_por_hoja", config["filas_por_hoja"]))
+        config["pagina_ancho_cm"] = float(formulario.get("pagina_ancho_cm", config["pagina_ancho_cm"]))
+        config["pagina_alto_cm"] = float(formulario.get("pagina_alto_cm", config["pagina_alto_cm"]))
+    except ValueError as error:
+        raise ValueError(f"Configuracion numerica invalida: {error}") from error
+
+    if config["formato"] not in {"excel", "pdf", "word"}:
+        raise ValueError("Formato de salida invalido.")
+    if config["tamano_pagina"] not in {"carta", "a4", "custom"}:
+        raise ValueError("Tamano de pagina invalido.")
+    if config["orientacion"] not in {"vertical", "horizontal"}:
+        raise ValueError("Orientacion invalida.")
+
+    obtener_configuracion_pagina(config["estudiantes_por_fila"], config["filas_por_hoja"])
+
+    if config["tamano_pagina"] == "custom":
+        if config["pagina_ancho_cm"] <= 0 or config["pagina_alto_cm"] <= 0:
+            raise ValueError("Las dimensiones personalizadas deben ser mayores a cero.")
+
+    return config
+
+
+def render_index_error(error: str, periodos_default: list[str], config: dict[str, object], status: int = 400):
+    return (
+        render_template(
+            "index.html",
+            periodos=PERIODOS,
+            periodos_default=periodos_default or ["001"],
+            config=config,
+            error=error,
+        ),
+        status,
+    )
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return {"status": "ok"}, 200
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html", periodos=PERIODOS, periodos_default=["001"])
+    return render_template(
+        "index.html",
+        periodos=PERIODOS,
+        periodos_default=["001"],
+        config=config_por_defecto(),
+        error=None,
+    )
 
 
 @app.route("/generar", methods=["POST"])
@@ -521,40 +945,79 @@ def generar():
     archivo = request.files.get("archivo_excel")
     periodos = request.form.getlist("periodos")
 
+    try:
+        config = leer_config_formulario(request.form)
+    except ValueError as error:
+        return render_index_error(str(error), periodos, config_por_defecto())
+
     if archivo is None or archivo.filename == "":
-        return render_template(
-            "index.html",
-            periodos=PERIODOS,
-            periodos_default=periodos or ["001"],
-            error="Debes cargar un archivo Excel (.xlsx).",
-        ), 400
+        return render_index_error("Debes cargar un archivo Excel (.xlsx).", periodos, config)
 
     if not archivo.filename.lower().endswith(".xlsx"):
-        return render_template(
-            "index.html",
-            periodos=PERIODOS,
-            periodos_default=periodos or ["001"],
-            error="Formato invalido. Solo se permite archivo .xlsx",
-        ), 400
+        return render_index_error("Formato invalido. Solo se permite archivo .xlsx.", periodos, config)
+
+    if config["formato"] == "pdf" and not REPORTLAB_OK:
+        return render_index_error("Falta dependencia reportlab para exportar PDF.", periodos, config)
+
+    if config["formato"] == "word" and not DOCX_OK:
+        return render_index_error("Falta dependencia python-docx para exportar Word.", periodos, config)
 
     try:
-        stream = generar_reportes_desde_excel(archivo, periodos)
+        archivo.stream.seek(0)
+        reportes, metricas = generar_reportes_desde_excel(archivo, periodos)
+
+        if config["formato"] == "excel":
+            stream = construir_excel_reporte(
+                reportes=reportes,
+                periodos=periodos,
+                metricas=metricas,
+                estudiantes_por_fila=config["estudiantes_por_fila"],
+                filas_por_hoja=config["filas_por_hoja"],
+                tamano_pagina=config["tamano_pagina"],
+                orientacion=config["orientacion"],
+            )
+            extension = "xlsx"
+            mimetype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        elif config["formato"] == "pdf":
+            stream = construir_pdf_reporte(
+                reportes=reportes,
+                periodos=periodos,
+                metricas=metricas,
+                estudiantes_por_fila=config["estudiantes_por_fila"],
+                filas_por_hoja=config["filas_por_hoja"],
+                tamano_pagina=config["tamano_pagina"],
+                orientacion=config["orientacion"],
+                pagina_ancho_cm=config["pagina_ancho_cm"],
+                pagina_alto_cm=config["pagina_alto_cm"],
+            )
+            extension = "pdf"
+            mimetype = "application/pdf"
+        else:
+            stream = construir_word_reporte(
+                reportes=reportes,
+                periodos=periodos,
+                metricas=metricas,
+                estudiantes_por_fila=config["estudiantes_por_fila"],
+                filas_por_hoja=config["filas_por_hoja"],
+                tamano_pagina=config["tamano_pagina"],
+                orientacion=config["orientacion"],
+                pagina_ancho_cm=config["pagina_ancho_cm"],
+                pagina_alto_cm=config["pagina_alto_cm"],
+            )
+            extension = "docx"
+            mimetype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
     except Exception as error:
-        return render_template(
-            "index.html",
-            periodos=PERIODOS,
-            periodos_default=periodos or ["001"],
-            error=f"No fue posible generar el reporte: {error}",
-        ), 400
+        return render_index_error(f"No fue posible generar el reporte: {error}", periodos, config)
 
     marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")
-    nombre = f"reporte_boletines_{marca_tiempo}.xlsx"
-    return send_file(
-        stream,
-        as_attachment=True,
-        download_name=nombre,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    nombre = f"reporte_boletines_{marca_tiempo}.{extension}"
+    return send_file(stream, as_attachment=True, download_name=nombre, mimetype=mimetype)
+
+
+@app.errorhandler(413)
+def archivo_muy_grande(_error):
+    return jsonify({"error": "El archivo supera el tamano permitido de 16 MB"}), 413
 
 
 if __name__ == "__main__":
